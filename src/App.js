@@ -85,11 +85,13 @@ const SuggesterPage = () => {
         fetchGenres();
     }, [API_KEY]);
 
-    const getMovieDetails = useCallback(async (movieId, language) => {
+    const getMovieDetails = useCallback(async (movieId) => {
         try {
-          const response = await fetch(`${API_BASE_URL}/movie/${movieId}?api_key=${API_KEY}&language=${language}`);
+          const response = await fetch(`${API_BASE_URL}/movie/${movieId}?api_key=${API_KEY}&language=es-ES&append_to_response=watch/providers`);
+          if (!response.ok) throw new Error('Error al obtener detalles de la película.');
           return await response.json();
         } catch (error) {
+          console.error("Error fetching movie details:", error);
           return null;
         }
     }, [API_KEY]);
@@ -105,7 +107,7 @@ const SuggesterPage = () => {
             return;
         }
 
-        let apiUrl = `${API_BASE_URL}/discover/movie?api_key=${API_KEY}&language=es-ES&sort_by=popularity.desc&include_adult=false&include_video=false&primary_release_date.gte=${startYear}-01-01&primary_release_date.lte=${endYear}-12-31&vote_average.gte=7&vote_count.gte=500`;
+        let apiUrl = `${API_BASE_URL}/discover/movie?api_key=${API_KEY}&sort_by=popularity.desc&include_adult=false&include_video=false&primary_release_date.gte=${startYear}-01-01&primary_release_date.lte=${endYear}-12-31&vote_average.gte=7&vote_count.gte=500`;
         if (selectedGenre) apiUrl += `&with_genres=${selectedGenre}`;
 
         try {
@@ -124,23 +126,31 @@ const SuggesterPage = () => {
             
             if (pageData.results && pageData.results.length > 0) {
                 const randomMovieFromList = pageData.results[Math.floor(Math.random() * pageData.results.length)];
-                const [detailsEs, detailsEn] = await Promise.all([getMovieDetails(randomMovieFromList.id, 'es-ES'), getMovieDetails(randomMovieFromList.id, 'en-US')]);
+                const details = await getMovieDetails(randomMovieFromList.id);
 
-                if (detailsEs && detailsEn) {
-                    const letterboxdSlug = detailsEs.original_title.toLowerCase().replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '-').replace(/--+/g, '-');
+                if (details) {
+                    const letterboxdSlug = (details.original_title || details.title).toLowerCase().replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '-').replace(/--+/g, '-');
                     const letterboxdUrl = `https://letterboxd.com/film/${letterboxdSlug}/`;
+                    
+                    const providers = details['watch/providers']?.results?.CL?.flatrate || [];
+                    const streamingProviders = providers.map(p => ({
+                        provider_name: p.provider_name,
+                        logo_path: `${IMAGE_BASE_URL}${p.logo_path}`
+                    }));
+
                     const finalMovieObject = {
-                        id: detailsEs.id,
-                        englishTitle: detailsEn.title,
-                        originalTitle: detailsEs.original_title,
-                        originalLanguage: detailsEs.original_language,
-                        year: detailsEs.release_date ? new Date(detailsEs.release_date).getFullYear() : 'N/A',
-                        genres: detailsEs.genres.map(g => g.name),
-                        tmdbRating: detailsEs.vote_average,
-                        imdbLink: detailsEs.imdb_id ? `https://www.imdb.com/title/${detailsEs.imdb_id}/` : '',
+                        id: details.id,
+                        englishTitle: details.title,
+                        originalTitle: details.original_title,
+                        originalLanguage: details.original_language,
+                        year: details.release_date ? new Date(details.release_date).getFullYear() : 'N/A',
+                        genres: details.genres.map(g => g.name),
+                        tmdbRating: details.vote_average,
+                        imdbLink: details.imdb_id ? `https://www.imdb.com/title/${details.imdb_id}/` : '',
                         letterboxdLink: letterboxdUrl,
-                        posterUrl: detailsEs.poster_path ? `${IMAGE_BASE_URL}${detailsEs.poster_path}` : 'https://placehold.co/500x750/1e293b/94a3b8?text=Sin+Imagen',
-                        runtime: detailsEs.runtime || 120
+                        posterUrl: details.poster_path ? `${IMAGE_BASE_URL}${details.poster_path}` : 'https://placehold.co/500x750/1e293b/94a3b8?text=Sin+Imagen',
+                        runtime: details.runtime || 120,
+                        streaming_providers: streamingProviders,
                     };
                     setSuggestedMovie(finalMovieObject);
                 } else {
@@ -176,7 +186,6 @@ const SuggesterPage = () => {
                     <input type="number" id="endYear" value={endYear} onChange={(e) => setEndYear(parseInt(e.target.value, 10))} min="1900" max={new Date().getFullYear()} className="bg-slate-700 border border-slate-600 text-slate-100 text-sm rounded-lg focus:ring-sky-500 focus:border-sky-500 block w-full p-2.5" />
                   </div>
                 </div>
-                <div className="text-xs text-slate-400 text-center px-2"><p>Criterio de calificación: TMDb ≥ 7.0</p></div>
                 <button onClick={handleSuggestion} disabled={isLoading} className="w-full bg-sky-500 hover:bg-sky-600 text-white font-bold py-3 px-4 rounded-lg text-lg transition duration-150 ease-in-out transform hover:scale-105 flex items-center justify-center space-x-2 disabled:bg-slate-500 disabled:cursor-not-allowed">
                   {isLoading ? 'Buscando...' : <><FilmIcon className="w-5 h-5" /><span>Sugerir Película</span></>}
                 </button>
@@ -201,26 +210,22 @@ const RecommendationsPage = () => {
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState(null);
 
-    // Filtros
     const [genres, setGenres] = useState([]);
     const [selectedGenre, setSelectedGenre] = useState('');
-    const [startYear, setStartYear] = useState(1980);
+    const [startYear, setStartYear] = useState(1920);
     const [endYear, setEndYear] = useState(new Date().getFullYear());
 
-    const GIST_URL = 'https://gist.githubusercontent.com/igndiaz/9be7507b0fd5e120eaff7126f59d637f/raw/c8406e446f66bb63c3164b2dc8de6fdbd83df809/recommendation.json';
+    const GIST_URL = 'https://gist.githubusercontent.com/igndiaz/9be7507b0fd5e120eaff7126f59d637f/raw/f325661ec331909162f63fa88540b0f2ca86ee64/recommendation.json';
 
-    // Cargar películas desde Gist y géneros desde TMDb
     useEffect(() => {
         const fetchInitialData = async () => {
             setIsLoading(true);
             try {
-                // Fetch genres
                 const genreResponse = await fetch(`https://api.themoviedb.org/3/genre/movie/list?api_key=c580d4653f4683e1df9473b6a8016355&language=es-ES`);
                 if (!genreResponse.ok) throw new Error('No se pudieron cargar los géneros.');
                 const genreData = await genreResponse.json();
                 setGenres(genreData.genres || []);
 
-                // Fetch recommendations
                 const movieResponse = await fetch(GIST_URL);
                 if (!movieResponse.ok) throw new Error('No se pudo obtener la lista de recomendaciones.');
                 const movieData = await movieResponse.json();
@@ -236,7 +241,6 @@ const RecommendationsPage = () => {
         fetchInitialData();
     }, [GIST_URL]);
     
-    // Aplicar filtros cuando cambien
     useEffect(() => {
         let movies = [...allMovies];
         
@@ -244,7 +248,6 @@ const RecommendationsPage = () => {
             movies = movies.filter(m => m.year >= startYear && m.year <= endYear);
         }
 
-        // **NUEVO**: Filtrado por género habilitado
         if (selectedGenre) {
             movies = movies.filter(movie => 
                 movie.genre_ids && movie.genre_ids.includes(parseInt(selectedGenre))
@@ -252,17 +255,11 @@ const RecommendationsPage = () => {
         }
 
         setFilteredMovies(movies);
-
     }, [selectedGenre, startYear, endYear, allMovies]);
 
 
-    if (isLoading) {
-        return <div className="text-center text-slate-400 p-10">Cargando recomendaciones...</div>;
-    }
-
-    if (error) {
-        return <div className="p-4 bg-red-700/50 border border-red-500 text-red-300 rounded-lg text-center"><p>{error}</p></div>;
-    }
+    if (isLoading) return <div className="text-center text-slate-400 p-10">Cargando recomendaciones...</div>;
+    if (error) return <div className="p-4 bg-red-700/50 border border-red-500 text-red-300 rounded-lg text-center"><p>{error}</p></div>;
 
     return (
         <section className="space-y-6 animate-fadeIn">
@@ -336,7 +333,8 @@ const MovieCard = ({ movie }) => {
                 {movie.originalLanguage && movie.originalLanguage !== 'en' && <p className="text-md text-slate-400 -mt-1 mb-4 text-center md:text-left italic">({movie.originalTitle})</p>}
                 <div className="grid grid-cols-1 gap-4 mb-4 text-sm"><div className="flex items-center space-x-2 bg-slate-600/30 p-3 rounded-md"><CalendarIcon className="w-5 h-5 text-sky-400"/><p><span className="font-semibold">Año:</span> {movie.year}</p></div><div className="flex items-center space-x-2 bg-slate-600/30 p-3 rounded-md"><FilmIcon className="w-5 h-5 text-sky-400"/><p><span className="font-semibold">Géneros:</span> {movie.genres.join(', ')}</p></div></div>
                 <div className="grid grid-cols-1 gap-4 mb-6"><div className="bg-slate-600/30 p-3 rounded-md text-center"><p className="font-semibold mb-1">TMDb Rating:</p><p className="text-2xl font-bold text-yellow-400 flex items-center justify-center"><StarIcon className="w-6 h-6 mr-1 text-yellow-400"/> {movie.tmdbRating.toFixed(1)} <span className="text-sm text-slate-400">/ 10</span></p></div></div>
-                <div className="flex flex-col sm:flex-row justify-center md:justify-start space-y-3 sm:space-y-0 sm:space-x-4">
+                <StreamingProviders providers={movie.streaming_providers} />
+                <div className="flex flex-col sm:flex-row justify-center md:justify-start space-y-3 sm:space-y-0 sm:space-x-4 mt-6">
                   {movie.imdbLink && <a href={movie.imdbLink} target="_blank" rel="noopener noreferrer" className="inline-block bg-yellow-500 hover:bg-yellow-600 text-slate-900 font-semibold py-2 px-4 rounded-lg text-center transition duration-150 w-full sm:w-auto">Ver en IMDB</a>}
                   <a href={movie.letterboxdLink} target="_blank" rel="noopener noreferrer" className="inline-block bg-green-500 hover:bg-green-600 text-slate-900 font-semibold py-2 px-4 rounded-lg text-center transition duration-150 w-full sm:w-auto">Ver en Letterboxd</a>
                 </div>
@@ -349,7 +347,6 @@ const MovieCard = ({ movie }) => {
 
 // --- Componente reutilizable para la tarjeta de película destacada ---
 const FeaturedMovieCard = ({ movie }) => {
-    // **NUEVO**: Añadimos estado para fecha y hora
     const [scheduleDate, setScheduleDate] = useState('');
     const [scheduleTime, setScheduleTime] = useState('20:00');
 
@@ -364,8 +361,7 @@ const FeaturedMovieCard = ({ movie }) => {
         const [hours, minutes] = scheduleTime.split(':').map(Number);
         const startDate = new Date(year, month - 1, day, hours, minutes);
         
-        // **CORRECCIÓN**: Usar la duración de la película para calcular la fecha de fin
-        const movieDuration = movie.runtime || 120; // fallback de 120 min
+        const movieDuration = movie.runtime || 120;
         const endDate = new Date(startDate.getTime() + movieDuration * 60 * 1000);
 
         const toGoogleFormat = (date) => date.toISOString().replace(/-|:|\.\d{3}/g, '');
@@ -390,16 +386,51 @@ const FeaturedMovieCard = ({ movie }) => {
             <div className="flex flex-col flex-grow">
                 <h3 className="font-bold text-2xl text-white mb-2">{movie.englishTitle}</h3>
                 <p className="text-slate-400 mb-4 flex-grow">{movie.review}</p>
-                <div className="mt-auto pt-4 flex flex-col sm:flex-row gap-3">
+                <StreamingProviders providers={movie.streaming_providers} />
+                <div className="mt-auto pt-4 flex flex-col sm:flex-row gap-3 border-t border-slate-700">
                     <a href={movie.imdbLink} target="_blank" rel="noopener noreferrer" className="flex-1 text-center bg-yellow-500 hover:bg-yellow-600 text-slate-900 font-semibold py-2 px-4 rounded-lg text-sm transition">Ver en IMDB</a>
                     <a href={movie.letterboxdLink} target="_blank" rel="noopener noreferrer" className="flex-1 text-center bg-green-500 hover:bg-green-600 text-slate-900 font-semibold py-2 px-4 rounded-lg text-sm transition">Ver en Letterboxd</a>
-                    <button onClick={handleSchedule} className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-lg text-sm transition flex items-center justify-center gap-2">
-                        <CalendarPlusIcon className="w-4 h-4" /> <span>Agendar</span>
-                    </button>
+                </div>
+                <div className="mt-4 pt-4 border-t border-slate-700">
+                    <h4 className="text-md font-semibold text-sky-300 mb-2">Agendar esta recomendación</h4>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                         <input type="date" value={scheduleDate} onChange={(e) => setScheduleDate(e.target.value)} className="bg-slate-700 border border-slate-600 text-slate-100 text-sm rounded-lg focus:ring-sky-500 focus:border-sky-500 block w-full p-2"/>
+                         <input type="time" value={scheduleTime} onChange={(e) => setScheduleTime(e.target.value)} className="bg-slate-700 border border-slate-600 text-slate-100 text-sm rounded-lg focus:ring-sky-500 focus:border-sky-500 block w-full p-2"/>
+                         <button onClick={handleSchedule} className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-3 rounded-lg text-sm transition flex items-center justify-center gap-2">
+                            <CalendarPlusIcon className="w-4 h-4" /> <span>Agendar</span>
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>
     );
 }
+
+// --- NUEVO Componente para mostrar los logos de streaming ---
+const StreamingProviders = ({ providers }) => {
+    if (!providers || providers.length === 0) {
+        return <div className="mb-4"><h4 className="text-sm font-semibold text-sky-300 mb-2">No disponible en streaming por suscripción.</h4></div>;
+    }
+
+    return (
+        <div className="mb-4">
+            <h4 className="text-sm font-semibold text-sky-300 mb-2">Disponible en:</h4>
+            <div className="flex flex-wrap gap-2">
+                {providers.map(provider => (
+                    <div key={provider.provider_name} className="flex items-center gap-2 bg-slate-700/50 p-1 pr-3 rounded-full">
+                        <img 
+                            src={provider.logo_path} 
+                            alt={provider.provider_name} 
+                            className="w-8 h-8 rounded-full object-cover"
+                            onError={(e) => { e.target.style.display = 'none'; }}
+                        />
+                        <span className="text-xs text-slate-300">{provider.provider_name}</span>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+};
+
 
 export default App;
